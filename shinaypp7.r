@@ -13,6 +13,11 @@ library(e1071)
 library(shiny)
 library(shinythemes)
 library(DT)
+library(dplyr)
+library(rpart)
+library(rpart.plot)
+
+
 
 # Define UI
 ui <- fluidPage(theme = shinytheme("cerulean"),
@@ -25,7 +30,6 @@ ui <- fluidPage(theme = shinytheme("cerulean"),
                              fileInput(inputId = "ABC", label = "Input File", multiple = FALSE, accept = NULL,
                                        width = NULL, buttonLabel = "Browse...",
                                        placeholder = "No file selected"),
-                      
                              actionButton(inputId = "submit", label = "Submit"),
                            ),
                            mainPanel(
@@ -58,11 +62,11 @@ ui <- fluidPage(theme = shinytheme("cerulean"),
                              tags$h4("Correlation Heatmap"),
                              plotOutput("correlation"),
                              br(),br(),br(),
-                             
+
                              ###Map plotting
                              tags$h5("Map"),
                              plotOutput("mapOut")
-                             
+
                            )),
                   tabPanel("Regression", 
                            dataTableOutput("regression_output_tbl"),
@@ -70,24 +74,35 @@ ui <- fluidPage(theme = shinytheme("cerulean"),
                            verbatimTextOutput("reg_summary")
                   ),
                   tabPanel("Classification", 
-                             tabsetPanel(
-                               tabPanel("Predicted Test Output",dataTableOutput("class_output_tbl")),
-                               tabPanel("Performance Analysis",
-                                        
-                                        #Confusion Matrix
-                                        tags$h4("Confusion Matrix"),
-                                        plotOutput("cm_matrix"),
-                                        br(),br(),br(),
-                                        
-                                        #Performance Metrics
-                                        tags$h4("Performance Metrics"),
-                                        tableOutput("class_metrics")
-                                        ),
-                               #tabPanel("Performance Metrics",tableOutput("class_metrics"))
-                             ))
-                
-                
-)) # fluidPage
+                           tabsetPanel(
+                             tabPanel("Predicted Test Output",dataTableOutput("class_output_tbl")),
+                             tabPanel("Performance Analysis: Train Data",
+
+                                      #Confusion Matrix
+                                      tags$h4("Confusion Matrix"),
+                                      plotOutput("cm_matrix"),
+                                      br(),br(),br(),
+                                      
+                                      #Performance Metrics
+                                      tags$h4("Performance Metrics: Train Data"),
+                                      tableOutput("class_metrics")
+                             ),
+
+                             tabPanel("Performance Analysis: Test Data",
+
+                                      #Confusion Matrix
+                                      tags$h4("Confusion Matrix"),
+                                      plotOutput("cm_matrix_test"),
+                                      br(),br(),br(),
+
+                                      #Performance Metrics
+                                      tags$h4("Performance Metrics: Test Data"),
+                                      tableOutput("class_metrics_test")
+                             ),
+                             #tabPanel("Performance Metrics",tableOutput("class_metrics"))
+                           ))
+
+                )) # fluidPage
 
 # Define server function  
 server <- function(input, output) {
@@ -134,7 +149,7 @@ server <- function(input, output) {
     ##correlation matrix for train data
     output$correlation<- renderPlot({plot_correlation(data_train_regression)})
     ##histogram for train data
-    output$hist_plots<- renderPlot(plot_histogram(data_shiny_input%>% select(2:14)))
+    output$hist_plots<- renderPlot(plot_histogram(data_shiny_input%>% dplyr::select(2,3,4,14)))
     #scatterplot
     output$scatter_plots<- renderPlot(plot_scatterplot(data_train_regression,by="cost"))
     ##plotting missing for train data
@@ -189,6 +204,8 @@ server <- function(input, output) {
     output$regression_output_tbl <- DT::renderDataTable(datatable(data_test_reg_output),options = list(autoWidth = TRUE))
     output$reg_summary <- renderPrint({summary(lmOut)})
     
+    
+    
     #-------!!!!!! Need to draw boxplot and remove outliers----~~
     
     #boxplot(data_classification%>% select (2:5,10,12,14))
@@ -220,7 +237,10 @@ server <- function(input, output) {
     training <- data_classification_input[intrain,]
     testing <- data_classification_input[-intrain,]
     
-    ###Running SVM Classification model:
+    
+    
+  
+    ###SVM CLASSIFICATION MODEL:
     training[['expensive']] = factor(training[['expensive']])
     svm<-ksvm(expensive ~ ., data=training, kernel= "rbfdot", kpar = "automatic",
               C = 5, cross = 3, prob.model = TRUE)
@@ -248,9 +268,15 @@ server <- function(input, output) {
     svmPred_test<- predict(svm,data_test_class)
     data_test_class_output<- data_test_class_input
     data_test_class_output$predicted_expensive<- svmPred_test
-    data_test_class_output$predicted_expensive<- ifelse(data_test_class_output$predicted_expensive == 1,"expensive","not expensive")
+    #data_test_class_output$predicted_expensive<- ifelse(data_test_class_output$predicted_expensive == 1,"expensive","not expensive")
     output$class_output_tbl<- DT::renderDataTable(datatable(data_test_class_output),options = list(autoWidth = TRUE))
     
+    
+    #####Decision Trees Model
+    tree_model = rpart(expensive ~ age+bmi+smoker+exercise, data = training, method="class",
+                       minsplit = 10, minbucket=3)
+    summary(tree_model)
+    rpart.plot(tree_model)
     
     
     ######performance metrics for train data:
@@ -258,7 +284,7 @@ server <- function(input, output) {
     confusion_tbl<- table(testing$expensive,svmPred)
     confusion_tbl
     
-    TP= confusion_tbl[1,1] #True Negative
+    TP = confusion_tbl[1,1] #True Negative
     FP = confusion_tbl[1,2] #False Negative
     FN = confusion_tbl[2,1] #False Positive
     TN = confusion_tbl[2,2] #True Positive
@@ -282,9 +308,48 @@ server <- function(input, output) {
     output$cm_matrix<- renderPlot(
       fourfoldplot(confusion_tbl, color = c("blue", "light green"),
                    conf.level = 0, margin = 1, main = "Confusion Matrix"))
+    
+    
+    
+    ######performance metrics for test data:
+    test_sol<- data.frame(X<- c(8,10,20,24,30,31,35,39,41,42,58,68,69,70,71,72,76,79,82,89),
+                          expensive<- c(1,1,0,0,0,1,1,1,0,0,1,0,0,0,0,0,0,1,0,1))
+    
+    confusion_tbl_test<- table(test_sol$expensive,svmPred_test)
+    
+    TP_test = confusion_tbl_test[1,1] #True Negative
+    FP_test = confusion_tbl_test[1,2] #False Negative
+    FN_test = confusion_tbl_test[2,1] #False Positive
+    TN_test = confusion_tbl_test[2,2] #True Positive
+    
+    ##Accuracy:
+    acc_test<-  (TP_test+TN_test)/(TP_test+TN_test+FP_test+FN_test)
+    
+    #Precision:
+    prec_test<- (TP_test)/(TP_test+FP_test)
+    
+    #Sensitivity:
+    sens_test<- (TP_test)/(TP_test+FN_test)
+    
+    #Recall:
+    rec_test<- TP_test/(TP_test+FN_test)
+    #F1-score:
+    f1_test<- (2*prec_test*sens_test)/(prec_test+sens_test)
+    
+    print(acc_test)
+    print(sens_test)
+    
+    
+    output$class_metrics_test<- renderTable({df_test <- data.frame(Sensitivity  = sens_test,Accuracy = acc_test,Precision = prec_test,F1_Score = f1_test)})
+    output$cm_matrix_test<- renderPlot(
+      fourfoldplot(confusion_tbl_test, color = c("blue", "light green"),
+                   conf.level = 0, margin = 1, main = "Confusion Matrix"))
+    
+    
+    
+    
+    
   })}
-
-
 
 # Create Shiny object
 shinyApp(ui = ui, server = server)
